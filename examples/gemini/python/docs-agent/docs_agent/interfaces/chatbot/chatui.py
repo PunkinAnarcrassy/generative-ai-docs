@@ -41,7 +41,13 @@ from docs_agent.postprocess.docs_retriever import SectionProbability
 from docs_agent.storage.chroma import Format
 from docs_agent.agents.docs_agent import DocsAgent
 
-from docs_agent.memory.logging import log_question, log_like
+from docs_agent.memory.logging import (
+    log_question,
+    log_debug_info_to_file,
+    log_feedback_to_file,
+    log_like,
+    log_dislike,
+)
 
 
 # This is used to define the app blueprint using a productConfig
@@ -56,7 +62,9 @@ def construct_blueprint(
             # A local Chroma DB is not needed for the Semantic Retreiver only mode.
             docs_agent = DocsAgent(config=product_config, init_chroma=False)
     elif product_config.db_type == "none":
-        docs_agent = DocsAgent(config=product_config, init_chroma=False, init_semantic=False)
+        docs_agent = DocsAgent(
+            config=product_config, init_chroma=False, init_semantic=False
+        )
     else:
         docs_agent = DocsAgent(config=product_config, init_chroma=True)
     logging.info(
@@ -70,11 +78,14 @@ def construct_blueprint(
         app_template = "chatui-experimental/index.html"
         redirect_index = "chatui-experimental.index"
     elif app_mode == "widget":
-        app_template = "chat-widget/index.html"
-        redirect_index = "chat-widget.index"
-    elif app_mode == "1.5":
-        app_template = "chatui-1.5/index.html"
-        redirect_index = "chatui-1.5.index"
+        app_template = "chatui-widget/index.html"
+        redirect_index = "chatui-widget.index"
+    elif app_mode == "full":
+        app_template = "chatui-full/index.html"
+        redirect_index = "chatui-full.index"
+    elif app_mode == "widget-pro":
+        app_template = "chatui-widget-pro/index.html"
+        redirect_index = "chatui-widget-pro.index"
     else:
         app_template = "chatui/index.html"
         redirect_index = "chatui.index"
@@ -119,9 +130,17 @@ def construct_blueprint(
     def like():
         if request.method == "POST":
             json_data = json.loads(request.data)
+            uuid_found = str(json_data.get("uuid")).strip()
             is_like = json_data.get("like")
-            uuid_found = json_data.get("uuid")
-            log_like(is_like, str(uuid_found).strip())
+            if is_like != None:
+                log_like(is_like, uuid_found)
+            is_dislike = json_data.get("dislike")
+            if is_dislike != None:
+                log_dislike(is_dislike, uuid_found)
+            # Check if the server has the `debugs` directory.
+            debug_dir = "logs/debugs"
+            if os.path.exists(debug_dir):
+                log_feedback_to_file(uuid_found, is_like, is_dislike)
             return "OK"
         else:
             return redirect(url_for(redirect_index))
@@ -191,9 +210,7 @@ def construct_blueprint(
             date_format = "%m%d%Y-%H%M%S"
             date = datetime.now(tz=pytz.utc)
             date = date.astimezone(pytz.timezone("US/Pacific"))
-            print(
-                "[" + date.strftime(date_format) + "] A user has submitted feedback."
-            )
+            print("[" + date.strftime(date_format) + "] A user has submitted feedback.")
             print("Submitted by: " + user_id + "\n")
             print("# " + question.strip() + "\n")
             print("## Response\n")
@@ -244,10 +261,19 @@ def construct_blueprint(
         else:
             return redirect(url_for(redirect_index))
 
-    # Render the log view page
+    # Render the log view page.
     @bp.route("/logs", methods=["GET", "POST"])
     def logs():
         return show_logs(agent=docs_agent)
+
+    # Render the debug view page.
+    @bp.route("/debugs/<filename>", methods=["GET", "POST"])
+    def debugs(filename):
+        if request.method == "GET":
+            filename = urllib.parse.unquote_plus(filename)
+            return show_debug_info(agent=docs_agent, filename=filename)
+        else:
+            return redirect(url_for(redirect_index))
 
     return bp
 
@@ -279,44 +305,21 @@ def ask_model(question, agent, template: str = "chatui/index.html"):
     aqa_response_in_html = ""
 
     # Debugging feature: Do not log this question if it ends with `?do_not_log`.
-    can_be_logged = "True"
+    can_be_logged = True
     question_match = re.search(r"^(.*)\?do_not_log$", question)
     if question_match:
         # Update the question to remove `do_not_log`.
         question = question_match[1] + "?"
-        can_be_logged = "False"
+        can_be_logged = False
 
     # Retrieve context and ask the question.
-    if "gemini" in docs_agent.config.models.language_model:
-        # For the `gemini-*` model
-        if docs_agent.config.docs_agent_config == "experimental":
-            results_num = 10
-            new_question_count = 5
-        else:
-            results_num = 5
-            new_question_count = 5
-        # Note: Error if max_sources > results_num, so leave the same for now.
-        if docs_agent.config.db_type == "none":
-            search_result = []
-            final_context = ""
-            # response = ask_content_model_with_context(context="", question=question)
-            # Issue if max_sources > results_num, so leave the same for now
-        else:
-            search_result, final_context = docs_agent.query_vector_store_to_build(
-                question=question,
-                token_limit=30000,
-                results_num=results_num,
-                max_sources=results_num,
-            )
-        try:
-            response, full_prompt = docs_agent.ask_content_model_with_context_prompt(
-                context=final_context, question=question
-            )
-            aqa_response_in_html = ""
-        except:
-            logging.error("Failed to ask content model with context prompt.")
-    elif "aqa" in docs_agent.config.models.language_model:
-        # For the AQA model
+    if (
+        docs_agent.config.app_mode == "full"
+        or docs_agent.config.app_mode == "widget-pro"
+        or "aqa" in docs_agent.config.models.language_model
+    ):
+        # For "full" and "pro" modes, use the AQA model for the first request.
+        # For the AQA model, check the DB type.
         if docs_agent.config.db_type == "chroma":
             (
                 response,
@@ -337,6 +340,37 @@ def ask_model(question, agent, template: str = "chatui/index.html"):
             aqa_response_in_html = json.dumps(
                 type(aqa_response_json).to_dict(aqa_response_json), indent=2
             )
+    else:
+        # For the `gemini-*` model, alway use the Chroma database.
+        if docs_agent.config.docs_agent_config == "experimental":
+            results_num = 10
+            new_question_count = 5
+        else:
+            results_num = 5
+            new_question_count = 5
+        # Note: Error if max_sources > results_num, so leave the same for now.
+        if docs_agent.config.db_type == "none":
+            search_result = []
+            final_context = ""
+            # response = ask_content_model_with_context(context="", question=question)
+            # Issue if max_sources > results_num, so leave the same for now
+        else:
+            this_token_limit = 30000
+            if docs_agent.config.models.language_model.startswith("models/gemini-1.5"):
+                this_token_limit = 50000
+            search_result, final_context = docs_agent.query_vector_store_to_build(
+                question=question,
+                token_limit=this_token_limit,
+                results_num=results_num,
+                max_sources=results_num,
+            )
+        try:
+            response, full_prompt = docs_agent.ask_content_model_with_context_prompt(
+                context=final_context, question=question
+            )
+            aqa_response_in_html = ""
+        except:
+            logging.error("Failed to ask content model with context prompt.")
 
     ### Check the AQA model's answerable_probability field
     probability = "None"
@@ -347,9 +381,13 @@ def ask_model(question, agent, template: str = "chatui/index.html"):
         except:
             probability = 0.0
 
-    # For the 1.5 mode, retrieve additional context from the secondary knowledge database.
+    # For "full" and "pro" modes, retrieve additional context from
+    # the secondary knowledge database.
     additional_context = ""
-    if docs_agent.config.app_mode == "1.5":
+    if (
+        docs_agent.config.app_mode == "full"
+        or docs_agent.config.app_mode == "widget-pro"
+    ):
         if docs_agent.config.secondary_db_type == "chroma":
             (
                 additional_search_result,
@@ -408,11 +446,14 @@ def ask_model(question, agent, template: str = "chatui/index.html"):
     new_uuid = uuid.uuid1()
     server_url = request.url_root.replace("http", "https")
 
-    ### The code below is added for the new Gemini 1.5 model.
-    # Ask the Gemini 1.5 model to generate a full summary.
-    if docs_agent.config.app_mode == "1.5" and docs_agent.config.db_type != "none":
+    ### The code below is added for "full" and "pro" modes.
+    # Ask the model to generate the main response.
+    if (
+        docs_agent.config.app_mode == "full"
+        or docs_agent.config.app_mode == "widget-pro"
+    ) and docs_agent.config.db_type != "none":
         if additional_context != "":
-            extended_context = f"RELEVANT CONTEXT FOUND IN DOCUMENTATION:\n\n{additional_context}\n\nRELEVANT CONVERSATIONS:\n\n{final_context}\n"
+            extended_context = f"RELEVANT CONTEXT FOUND IN SECONDARY KNOWLEDGE SOURCE:\n\n{additional_context}\n\nRELEVANT CONTEXT FOUND IN PRIMARY KNOWLEDGE SOURCE:\n\n{final_context}\n"
         else:
             extended_context = f"{final_context}\n"
         additional_condition = (
@@ -426,30 +467,52 @@ def ask_model(question, agent, template: str = "chatui/index.html"):
             context=extended_context,
             question=question,
             prompt=new_condition,
-            model="gemini-1.5-pro",
+            model="gemini-1.5",
         )
         log_lines = f"{response}\n\n{summary_response}"
     else:
         summary_response = ""
         log_lines = f"{response}"
- 
+
     ### LOG THIS REQUEST.
-    if docs_agent.config.enable_logs_to_markdown == "True":
-        log_question(
-            new_uuid,
-            question,
-            log_lines,
-            probability,
-            save=can_be_logged,
-            logs_to_markdown="True",
-        )
-    else:
-        log_question(new_uuid, question, log_lines, probability, save=can_be_logged)
+    if can_be_logged:
+        if docs_agent.config.enable_logs_to_markdown == "True":
+            log_question(
+                new_uuid,
+                question,
+                log_lines,
+                probability,
+                save=True,
+                logs_to_markdown="True",
+            )
+        else:
+            log_question(new_uuid, question, log_lines, probability, save=True)
+        # Log debug information.
+
+        if docs_agent.config.enable_logs_for_debugging == "True":
+            top_source_url = ""
+            if len(search_result) > 0:
+                top_source_url = search_result[0].section.url
+            source_urls = ""
+            index = 1
+            for result in search_result:
+                source_urls += "[" + str(index) + "]: " + str(result.section.url) + "\n"
+                index += 1
+            log_debug_info_to_file(
+                uid=new_uuid,
+                user_question=question,
+                response=log_lines,
+                context=final_context,
+                top_source_url=top_source_url,
+                source_urls=source_urls,
+                probability=probability,
+                server_url=server_url,
+            )
 
     ### Check the feedback mode in the `config.yaml` file.
     feedback_mode = "feedback"
-    if hasattr(docs_agent.config, "feedback_mode") and  docs_agent.config.feedback_mode == "rewrite":
-        feedback_mode = "rewrite"
+    if hasattr(docs_agent.config, "feedback_mode"):
+        feedback_mode = str(docs_agent.config.feedback_mode)
 
     return render_template(
         template,
@@ -518,4 +581,25 @@ def show_logs(agent, template: str = "admin/logs.html"):
         product=product,
         logs=log_contents,
         answerable_logs=answerable_contents,
+    )
+
+
+# Display a page showing debug information.
+def show_debug_info(agent, filename: str, template: str = "admin/debugs.html"):
+    docs_agent = agent
+    product = docs_agent.config.product_name
+    debug_dir = "logs/debugs"
+    debug_filename = f"{debug_dir}/{filename}"
+    debug_info = ""
+    if docs_agent.config.enable_logs_for_debugging == "True":
+        try:
+            if debug_filename.endswith("txt"):
+                with open(debug_filename, "r", encoding="utf-8") as file:
+                    debug_info = file.read()
+        except:
+            debug_info = "Cannot find or open this file."
+    return render_template(
+        template,
+        product=product,
+        debug_info=debug_info,
     )

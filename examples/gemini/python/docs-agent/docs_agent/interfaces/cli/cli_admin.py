@@ -14,51 +14,32 @@
 # limitations under the License.
 #
 
-"""Docs Agent CLI"""
+"""Docs Agent CLI client"""
 
 import click
 import sys
 import typing
-from functools import wraps
 from docs_agent.utilities import config
-from docs_agent.utilities.config import ReadDbConfigs, ConfigFile
+from docs_agent.utilities.config import ReadDbConfigs
 from docs_agent.utilities.config import return_config_and_product
 from docs_agent.utilities.helpers import (
     parallel_backup_dir,
     return_pure_dir,
     end_path_backslash,
     start_path_no_backslash,
+    resolve_path,
 )
 from docs_agent.preprocess import files_to_plain_text as chunker
 from docs_agent.preprocess import populate_vector_database as populate_script
 from docs_agent.benchmarks import run_benchmark_tests as benchmarks
 from docs_agent.interfaces import chatbot as chatbot_flask
-from docs_agent.interfaces import run_console as console
 from docs_agent.storage.google_semantic_retriever import SemanticRetriever
 from docs_agent.storage.chroma import ChromaEnhanced
+from docs_agent.memory.logging import write_logs_to_csv_file
+from docs_agent.interfaces.cli.cli_common import common_options
+from docs_agent.interfaces.cli.cli_common import show_config
 import socket
 import os
-import string
-import re
-
-
-def common_options(func):
-    @wraps(func)
-    @click.option(
-        "--config_file",
-        help="Specify a configuration file. Defaults to config.yaml.",
-        default=None,
-    )
-    @click.option(
-        "--product",
-        help="Specify a product. Defaults to all products. For chatbot, defaults to the first product in config.yaml.",
-        default=None,
-        multiple=True,
-    )
-    def wrapper(*args, **kwargs):
-        return func(*args, **kwargs)
-
-    return wrapper
 
 
 @click.group(invoke_without_command=True)
@@ -73,25 +54,6 @@ def cli_admin(ctx, config_file, product):
     if ctx.invoked_subcommand is None:
         click.echo("Docs Agent configuration:\n")
         show_config()
-
-
-@click.group(invoke_without_command=True)
-@common_options
-@click.pass_context
-def cli_client(ctx, config_file, product):
-    """With Docs Agent, you can interact with Google's Gemini
-    models as well as content stored in Google Semantic Retriever Corpora."""
-    ctx.ensure_object(dict)
-    # Print config.yaml if agent is run without a command.
-    if ctx.invoked_subcommand is None:
-        click.echo("Docs Agent configuration:\n")
-        show_config()
-
-
-cli = click.CommandCollection(
-    sources=[cli_admin, cli_client],
-    help="With Docs Agent, you can populate vector databases, manage online corpora, and interact with Google's Gemini models.",
-)
 
 
 @cli_admin.command()
@@ -140,7 +102,10 @@ def populate(
     "--app_mode",
     default=None,
     show_default=True,
-    type=click.Choice(["web", "widget", "1.5", "experimental"], case_sensitive=False),
+    type=click.Choice(
+        ["web", "full", "widget", "widget-pro", "experimental"],
+        case_sensitive=False,
+    ),
     help="Specify a mode for the chatbot.",
 )
 @click.option(
@@ -195,129 +160,22 @@ def chatbot(
 
 
 @cli_admin.command()
-@common_options
-def show_config(config_file: typing.Optional[str], product: list[str] = [""]):
-    """Print the Docs Agent configuration."""
-    # Loads configurations from common options
-    loaded_config, product_config = return_config_and_product(
-        config_file=config_file, product=product
-    )
-    for item in product_config.products:
-        print("==========================")
-        print(item)
-
-
-@cli_client.command(name="tellme")
-@click.argument("words", nargs=-1)
-@common_options
-def tellme(words, config_file: typing.Optional[str], product: list[str] = [""]):
-    """Answer a question related to the product."""
-    # Loads configurations from common options
-    loaded_config, product_configs = return_config_and_product(
-        config_file=config_file, product=product
-    )
-    if product == ():
-        # Extracts the first product by default
-        product_config = ConfigFile(products=[product_configs.products[0]])
-    else:
-        product_config = product_configs
-    question = ""
-    for word in words:
-        question += word + " "
-    console.ask_model(question.strip(), product_config)
-
-
-@cli_client.command()
-@click.argument("words", nargs=-1)
 @click.option(
-    "--file",
-    type=click.Path(),
-    help="Only available with Gemini 1.5 Pro. Specify a file with which a task is performed.",
-)
-@click.option(
-    "--rag",
-    is_flag=True,
-    help="Only works with --file. Augments the context input with content from your configured RAG system.",
+    "--model",
+    help="Specify a model to use. Overrides the model (language_model) for all loaded product configurations.",
+    default=None,
+    multiple=False,
 )
 @common_options
-def helpme(
-    words,
+def benchmark(
     config_file: typing.Optional[str],
-    file: typing.Optional[str] = None,
-    rag: bool = False,
     product: list[str] = [""],
+    model: typing.Optional[str] = None,
 ):
-    """(Experimental) Ask AI to perform a task using console output.
-    Use --file to perform a task on a specific file."""
-    # Loads configurations from common options
-    loaded_config, product_configs = return_config_and_product(
-        config_file=config_file, product=product
-    )
-    if product == ():
-        # Extracts the first product by default
-        product_config = ConfigFile(products=[product_configs.products[0]])
-    else:
-        product_config = product_configs
-    question = ""
-    for word in words:
-        question += word + " "
-    question = question.strip()
-    if file and file != "None":
-        # This feature is only available in gemini 1.5 pro (large context)
-        if product_config.products[0].models.language_model.startswith(
-            "models/gemini-1.5-pro"
-        ):
-            try:
-                this_file = os.path.realpath(os.path.join(os.getcwd(), file))
-                with open(this_file, "r", encoding="utf-8") as auto:
-                    # Read the input content
-                    content = auto.read()
-                    auto.close()
-                final_file = f"THE CONTENT OF THE FILE {file} BELOW:\n\n" + content
-                console.ask_model_with_file(
-                    question.strip(), product_config, file=final_file, rag=rag
-                )
-            except FileNotFoundError:
-                click.echo(f"File not found: {file}")
-        else:
-            click.echo(
-                f"File mode is not supported with this model: {product_config.products[0].models.language_model}"
-            )
-    else:
-        terminal_output = ""
-        # Set the default filename created from the `script` command.
-        file_path = "/tmp/docs_agent_console_input"
-        # Set the maximum number of lines to read from the terminal.
-        lines_limit = -150
-        if product_config.products[0].models.language_model.startswith(
-            "models/gemini-1.5-pro"
-        ):
-            # Read, at the most, 5000 lines printed from the latest command ran on the terminal.
-            lines_limit = -5000
-        try:
-            with open(file_path, "r", encoding="utf-8") as file:
-                for line in file.readlines()[int(lines_limit) : -2]:
-                    # Filter non-ascii and control characters.
-                    printable = set(string.printable)
-                    line = "".join(filter(lambda x: x in printable, line))
-                    terminal_output += line
-                    # if an Enter key is detected, remove all saved lines.
-                    # This allows to read the output of the last commandline only.
-                    if re.search("^\[\?2004", line):
-                        terminal_output = ""
-        except:
-            terminal_output = "No console output is provided."
-        context = "THE FOLLOWING IS MY CONSOLE OUTPUT:\n\n" + terminal_output
-        console.ask_model_for_help(question.strip(), context, product_config)
-
-
-@cli_admin.command()
-@common_options
-def benchmark(config_file: typing.Optional[str], product: list[str] = [""]):
     """Run the Docs Agent benchmark test."""
     # Loads configurations from common options
     loaded_config, product_config = return_config_and_product(
-        config_file=config_file, product=product
+        config_file=config_file, product=product, model=model
     )
     benchmarks.run_benchmarks()
 
@@ -536,6 +394,41 @@ def backup_chroma(
         click.echo(f"Successfully backed up {input_chroma} to {final_output_dir}.")
     else:
         click.echo(f"Can't backup chroma database specified: {input_chroma}")
+
+
+@cli_admin.command()
+@click.option("--date", default="None")
+@common_options
+def write_logs_to_csv(
+    date: typing.Optional[str],
+    config_file: typing.Optional[str],
+    product: list[str] = [""],
+):
+    """Write captured debug information to a CSV file."""
+    # Loads configurations from common options
+    loaded_config, product_config = return_config_and_product(
+        config_file=config_file, product=product
+    )
+    output_filename = "debug-info-all.csv"
+    if date != "None":
+        output_filename = "debug-info-" + str(date) + ".csv"
+        click.echo(
+            f"Writing all debug logs from {date} to the logs/{output_filename} file:\n"
+        )
+    else:
+        click.echo(f"Writing all debug logs to the logs/{output_filename} file:\n")
+    # Write the target debug logs to a CSV file.
+    write_logs_to_csv_file(log_date=date)
+    # Print the content of the CSV file.
+    with open("./logs/" + output_filename, "r") as f:
+        print(f.read())
+        f.close()
+
+
+cli = click.CommandCollection(
+    sources=[cli_admin],
+    help="With Docs Agent admin, you can populate vector databases, manage online corpora, and maintain Docs Agent.",
+)
 
 
 if __name__ == "__main__":

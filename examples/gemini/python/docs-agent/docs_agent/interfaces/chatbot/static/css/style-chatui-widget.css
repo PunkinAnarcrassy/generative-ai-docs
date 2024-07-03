@@ -22,7 +22,7 @@ body {
     font-weight: 300;
     max-width: 960px;
     margin: auto;
-    background-color: #d9d9d9;
+    background-color: white;
     padding-top: 15px;
     padding-bottom: 15px;
   }
@@ -40,16 +40,17 @@ body {
     margin: 0 0 0.5em;
     font-weight: 500;
     font-size: 1.3em;
+    margin-top: 0.1em;
     margin-left: 1.0em;
-    margin-top: 0.3em;
+    margin-bottom: 0.9em;
   }
 
   h2 {
     margin: 0;
-    margin-top: 17px;
-    margin-bottom: 15px;
+    margin-top: 15px;
+    margin-bottom: 10px;
     font-weight: normal;
-    font-size: 1.5em;
+    font-size: 1.4em;
   }
 
   h3 {
@@ -77,6 +78,15 @@ body {
 
   /* ======= Style layout by ID ======= */
 
+  #iframe-box {
+    margin: 0px;
+    max-width: 760px;
+    font: 15px arial, sans-serif;
+    background-color: white;
+    padding-bottom: 0px;
+    padding-left: 0px;
+  }
+
   #callout-box {
     margin: auto;
     max-width: 800px;
@@ -92,35 +102,10 @@ body {
   #important-box {
     font-size: 0.9em;
     font-family: system-ui;
+    word-break: break-word;
     line-height: 150%;
     word-break: break-word;
-    #padding: 4px;
-    padding-top: 5px;
-    padding-bottom: 5px;
-    padding-left: 10px;
-    padding-right: 10px;
-    background-color: #fcb8a1;
-    border-radius: 5px;
-    border-width: 2px;
-    border-style: solid;
-  }
-
-  #tldr-response-box {
-    font-size: 0.8em;
-    font-family: sans-serif;
-    line-height: 140%;
-    margin-top: 10px;
-    margin-bottom: 25px;
-    border-width: 2px;
-    border-style: solid;
-    padding-top: 5px;
-    padding-bottom: 5px;
-    padding-left: 10px;
-    padding-right: 10px;
-    background-color: #b1d8f1;
-    border-radius: 5px;
-    border-width: 2px;
-    border-style: solid;
+    padding: 4px;
   }
 
   #response-box {
@@ -129,9 +114,15 @@ body {
     line-height: 140%;
     margin-top: 10px;
   }
+
   #suggested-questions {
     font-family: sans-serif;
     word-break: break-word;
+  }
+
+  #source-pages {
+    font-family: sans-serif;
+    word-break: break-all;
   }
 
   #context-content{
@@ -247,8 +238,14 @@ body {
     cursor:pointer;
   }
 
-  .selected {
+  #like-button.selected {
     background-color: #1e6a9c;
+    padding-top: 7px;
+    padding-bottom: 7px;
+  }
+
+  #dislike-button.selected {
+    background-color: #CF5C3F;
     padding-top: 7px;
     padding-bottom: 7px;
   }
@@ -283,6 +280,12 @@ body {
   }
 
   .related-questions {
+    margin-bottom: 20px;
+    font-size: 0.9em;
+    line-height: 140%;
+  }
+
+  .relevant-sources {
     margin-bottom: 20px;
     font-size: 0.9em;
     line-height: 140%;
@@ -329,6 +332,15 @@ body {
     cursor:pointer;
   }
 
+  #dislike-button {
+    border: 0;
+    color: #fff;
+    padding-left: 7px;
+    padding-right: 7px;
+    border-radius: 5px;
+    cursor:pointer;
+  }
+
   #submit-button {
     border: 0;
     background: none;
@@ -348,6 +360,7 @@ body {
     color: #027f02d6;
     font-family: fantasy;
   }
+
   #feedback-submit-button {
     border: 0;
     background: none;
@@ -373,7 +386,7 @@ body {
     max-height: 500px;
     max-width: -webkit-fill-available;
     height: 300px;
-    width: 650px;
+    width: 580px;
     padding: 8px;
   }
 
@@ -420,7 +433,7 @@ body {
   .search {
     border: 2px solid #CF5C3F;
     overflow: auto;
-    max-width: 700px;
+    max-width: 600px;
     margin-top: 15px;
     margin-left: 10px;
     margin-bottom: 10px;
@@ -608,3 +621,4 @@ body {
   content:"Generating a response..."
 }
 @keyframes animation {to{clip-path: inset(0 -1ch 0 0)}}
+
